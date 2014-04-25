@@ -1,37 +1,27 @@
-# This is the blocking version of the Slow Poetry Server.
+import json
+import os
 
-import optparse, os, socket, time
+from twisted.internet import defer, reactor
 
+from stompest.config import StompConfig
+
+from stompest.async import Stomp
+from stompest.async.listener import ReceiptListener
+
+import optparse, os
 
 def parse_args():
-    usage = """usage: %prog [options] poetry-file
+    usage = """usage: %prog poetry-file
 
-This is the Slow Poetry Server, blocking edition.
+This is a poetry server, which serves up poetry over ActiveMQ.
+
 Run it like this:
 
-  python slowpoetry.py <path-to-poetry-file>
+  python server.py <path-to-poetry-file>
 
-If you are in the base directory of the twisted-intro package,
-you could run it like this:
-
-  python blocking-server/slowpoetry.py poetry/ecstasy.txt
-
-to serve up John Donne's Ecstasy, which I know you want to do.
 """
 
     parser = optparse.OptionParser(usage)
-
-    help = "The port to listen on. Default to a random available port."
-    parser.add_option('--port', type='int', help=help)
-
-    help = "The interface to listen on. Default is localhost."
-    parser.add_option('--iface', help=help, default='localhost')
-
-    help = "The number of seconds between sending bytes."
-    parser.add_option('--delay', type='float', help=help, default=.7)
-
-    help = "The number of bytes to send at a time."
-    parser.add_option('--num-bytes', type='int', help=help, default=10)
 
     options, args = parser.parse_args()
 
@@ -45,54 +35,39 @@ to serve up John Donne's Ecstasy, which I know you want to do.
 
     return options, poetry_file
 
+class Producer(object):
+    def __init__(self, name, text, config=None):
+        if config is None:
+            address = os.getenv('ACTIVEMQ_PORT_61613_TCP', 'tcp://localhost:61613')
+            config = StompConfig(address)
+        self.config = config
+        self.queue = '/poetry'
 
-def send_poetry(sock, poetry_file, num_bytes, delay):
-    """Send some poetry slowly down the socket."""
+        self.text = text.split('\n')
 
-    inputf = open(poetry_file)
+    @defer.inlineCallbacks
+    def run(self):
+        client = yield Stomp(self.config).connect()
+        client.add(ReceiptListener(1.0))
 
-    while True:
-        bytes = inputf.read(num_bytes)
+        i = 0
+        for line in self.text:
+            yield client.send(self.queue, json.dumps({'line': i, 'content': line}), receipt='message-%d' % i)
+            i += 1
 
-        if not bytes: # no more poetry :(
-            sock.close()
-            inputf.close()
-            return
-
-        print 'Sending %d bytes' % len(bytes)
-
-        try:
-            sock.sendall(bytes) # this is a blocking call
-        except socket.error:
-            sock.close()
-            inputf.close()
-            return
-
-        time.sleep(delay)
-
-
-def serve(listen_socket, poetry_file, num_bytes, delay):
-    while True:
-        sock, addr = listen_socket.accept()
-
-        print 'Somebody at %s wants poetry!' % (addr,)
-
-        send_poetry(sock, poetry_file, num_bytes, delay)
-
+        client.disconnect(receipt='bye')
+        yield client.disconnected # graceful disconnect: waits until all receipts have arrived
+        reactor.stop()
 
 def main():
-    options, poetry_file= parse_args()
+    options, poetry_file = parse_args()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((options.iface, options.port or 0))
+    poem = open(poetry_file).read()
 
-    sock.listen(5)
+    producer = Producer(poetry_file, poem)
 
-    print 'Serving %s on port %s.' % (poetry_file, sock.getsockname()[1])
-
-    serve(sock, poetry_file, options.num_bytes, options.delay)
-
+    producer.run()
+    reactor.run()
 
 if __name__ == '__main__':
     main()
