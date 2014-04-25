@@ -1,1 +1,2 @@
-stomp
+twisted
+stompest.async
