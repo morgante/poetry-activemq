@@ -19,4 +19,4 @@ EXPOSE 		5000
 WORKDIR		/src
 
 ENTRYPOINT ["python"]
-CMD ["server.py"]
+CMD ["server.py","poetry/ecstacy.txt"]

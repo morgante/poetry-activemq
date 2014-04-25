@@ -8,7 +8,7 @@ from stompest.config import StompConfig
 from stompest.async import Stomp
 from stompest.async.listener import ReceiptListener
 
-import optparse, os
+import optparse
 
 def parse_args():
     usage = """usage: %prog poetry-file
@@ -39,10 +39,11 @@ class Producer(object):
     def __init__(self, name, text, config=None):
         if config is None:
             address = os.getenv('ACTIVEMQ_PORT_61613_TCP', 'tcp://localhost:61613')
+            print "sending poetry to: %s" % address
             config = StompConfig(address)
         self.config = config
-        self.queue = '/poetry'
-
+        self.queue = '/queue/poetry'
+        self.name = name
         self.text = text.split('\n')
 
     @defer.inlineCallbacks
@@ -51,8 +52,13 @@ class Producer(object):
         client.add(ReceiptListener(1.0))
 
         i = 0
+
+        # Send the header
+        yield client.send(self.queue, json.dumps({'type': 'meta', 'name': self.name, 'lines': len(self.text)}), receipt='message-%d' % i)
+        i += 1
+
         for line in self.text:
-            yield client.send(self.queue, json.dumps({'line': i, 'content': line}), receipt='message-%d' % i)
+            yield client.send(self.queue, json.dumps({'type': 'line', 'name': self.name, 'line': i, 'content': line}), receipt='message-%d' % i)
             i += 1
 
         client.disconnect(receipt='bye')
